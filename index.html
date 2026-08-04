@@ -130,13 +130,15 @@
 
   @media print{
     body{background:#fff;padding:0;font-size:11px;-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact;}
-    .toolbar,.roster-editor,.legend-editor,#status,.no-print,#loginBar,#cloudSetup,.legend,#generatePanel{display:none !important;}
+    .toolbar,.roster-editor,.legend-editor,#status,.no-print,#loginBar,#cloudSetup,.legend,#generatePanel,#pageTitle{display:none !important;}
     .tablewrap{border:none;}
-    select.shift-select{border:none;pointer-events:none;-webkit-appearance:none;appearance:none;-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact;}
-    input.shift-time{border:none;-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact;}
+    select.shift-select,input.shift-time{display:none !important;}
+    .print-label{display:block !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact;}
     .celltoggles{display:none !important;}
     table{min-width:0;}
   }
+  .print-label{display:none;font-size:11px;padding:2px;border-radius:3px;text-align:center;}
+  .print-label .plabel-type{font-weight:bold;}
 </style>
 </head>
 <body>
@@ -794,6 +796,20 @@ function renderTable(){
         timeInput.value = current.time;
         applyCellColor(sel, timeInput, current.type);
 
+        const printLabel = document.createElement('div');
+        printLabel.className = 'print-label';
+
+        function syncPrintLabel(){
+          const l = legendByKey(sel.value);
+          printLabel.style.background = l.color;
+          if(sel.value === 'OFF'){
+            printLabel.textContent = 'OFF';
+          } else {
+            printLabel.innerHTML = `<div class="plabel-type">${l.label}</div><div>${timeInput.value || ''}</div>`;
+          }
+        }
+        syncPrintLabel();
+
         function refreshCellUI(){
           const c = getCell(emp.id, d);
           td.classList.toggle('locked', !!c.locked);
@@ -825,10 +841,12 @@ function renderTable(){
           applyCellColor(sel, timeInput, t);
           setCell(emp.id, d, {type:t, time:timeInput.value});
           updateRowTotal(emp.id);
+          syncPrintLabel();
         });
         timeInput.addEventListener('input', () => {
           setCell(emp.id, d, {time:timeInput.value});
           updateRowTotal(emp.id);
+          syncPrintLabel();
         });
         lockBtn.addEventListener('click', () => {
           const c = getCell(emp.id, d);
@@ -844,6 +862,7 @@ function renderTable(){
         td.appendChild(toggles);
         td.appendChild(sel);
         td.appendChild(timeInput);
+        td.appendChild(printLabel);
         tr.appendChild(td);
       }
 
