@@ -274,7 +274,7 @@ function newEmpId(){ return 'e' + (uidCounter++) + '_' + Math.random().toString(
 function normalizeRosterFromNames(defaultGroups){
   return defaultGroups.map(g => ({
     name: g.name,
-    employees: g.employees.map(n => ({id:newEmpId(), name:n, pref:'either', areaPref:'either', blockedDays:[]}))
+    employees: g.employees.map(n => ({id:newEmpId(), name:n, pref:'either', areaPref:'either', blockedDays:[], recurringShifts:{}, hourTarget:null, preferredDayOff:null}))
   }));
 }
 
@@ -562,17 +562,20 @@ async function loadRosterAndLegend(){
     storageGetJSON(STORE_PREFIX + ':requirements'),
   ]);
   roster = savedRoster || normalizeRosterFromNames(DEFAULT_ROSTER);
-  roster.forEach(g => g.employees.forEach(e => { if(!e.pref) e.pref = 'either'; if(!e.areaPref) e.areaPref = 'either'; if(!e.blockedDays) e.blockedDays = []; }));
+  roster.forEach(g => g.employees.forEach(e => { if(!e.pref) e.pref = 'either'; if(!e.areaPref) e.areaPref = 'either'; if(!e.blockedDays) e.blockedDays = []; if(!e.recurringShifts) e.recurringShifts = {}; if(e.hourTarget === undefined) e.hourTarget = null; if(e.preferredDayOff === undefined) e.preferredDayOff = null; }));
   legend = savedLegend || DEFAULT_LEGEND.map(x => ({...x}));
   legend.forEach(l => { if(!l.period) l.period = 'either'; if(!l.area) l.area = 'either'; if(l.defaultTime == null) l.defaultTime = ''; });
   requirements = savedReq || {...DEFAULT_REQUIREMENTS};
-  // migrate old single-number requirement format to {day,night}
+  // migrate old formats: single number -> {day,night}; single day/night number -> per-weekday array of 7
   Object.keys(requirements).forEach(k => {
     if(typeof requirements[k] === 'number'){
       requirements[k] = {day: requirements[k], night: requirements[k]};
     }
-    if(!requirements[k].dayType) requirements[k].dayType = defaultTypeForPeriod('day');
-    if(!requirements[k].nightType) requirements[k].nightType = defaultTypeForPeriod('night');
+    const req = requirements[k];
+    if(typeof req.day === 'number' || req.day == null) req.day = new Array(7).fill(req.day || 0);
+    if(typeof req.night === 'number' || req.night == null) req.night = new Array(7).fill(req.night || 0);
+    if(!req.dayType) req.dayType = defaultTypeForPeriod('day');
+    if(!req.nightType) req.nightType = defaultTypeForPeriod('night');
   });
 }
 
@@ -675,8 +678,28 @@ function computeEmployeeWeeklyHours(empId){
 function updateRowTotal(empId){
   const el = document.getElementById('total-' + empId);
   if(!el) return;
+  formatTotalCell(el, empId);
+}
+
+function formatTotalCell(el, empId){
+  const emp = allEmployeesFlat().find(e => e.id === empId);
   const {total, anyUnparsed} = computeEmployeeWeeklyHours(empId);
-  el.textContent = (Math.round(total*100)/100) + (anyUnparsed ? ' +?' : '');
+  const rounded = Math.round(total*100)/100;
+  el.innerHTML = '';
+  el.style.color = '';
+
+  el.appendChild(document.createTextNode(String(rounded)));
+
+  if(emp && emp.hourTarget != null && emp.hourTarget > 0){
+    const targetSpan = document.createElement('span');
+    targetSpan.className = 'no-print';
+    targetSpan.textContent = ' / ' + emp.hourTarget;
+    el.appendChild(targetSpan);
+    if(total > emp.hourTarget) el.style.color = '#b03030';
+    else if(total >= emp.hourTarget - 2) el.style.color = '#2e9e44';
+    else el.style.color = '#888';
+  }
+  if(anyUnparsed) el.appendChild(document.createTextNode(' +?'));
   el.title = anyUnparsed ? 'Some times couldn\'t be read — check formatting like 9:00/3:00' : '';
 }
 
@@ -827,9 +850,7 @@ function renderTable(){
       const totalTd = document.createElement('td');
       totalTd.className = 'totalcell';
       totalTd.id = 'total-' + emp.id;
-      const initial = computeEmployeeWeeklyHours(emp.id);
-      totalTd.textContent = (Math.round(initial.total*100)/100) + (initial.anyUnparsed ? ' +?' : '');
-      if(initial.anyUnparsed) totalTd.title = 'Some times couldn\'t be read — check formatting like 9:00/3:00';
+      formatTotalCell(totalTd, emp.id);
       tr.appendChild(totalTd);
       tbody.appendChild(tr);
     });
@@ -911,6 +932,35 @@ function renderRosterEditor(){
       phoneInput.style.width = '120px';
       phoneInput.value = emp.phone || '';
       phoneInput.addEventListener('change', () => { emp.phone = phoneInput.value.trim(); saveRoster(); });
+      const targetInput = document.createElement('input');
+      targetInput.type = 'text';
+      targetInput.inputMode = 'numeric';
+      targetInput.placeholder = 'target hrs/wk';
+      targetInput.style.width = '90px';
+      targetInput.value = emp.hourTarget != null ? emp.hourTarget : '';
+      targetInput.addEventListener('change', () => {
+        const v = parseFloat(targetInput.value);
+        emp.hourTarget = (targetInput.value.trim() === '' || isNaN(v)) ? null : v;
+        saveRoster();
+        updateRowTotal(emp.id);
+      });
+      const dayOffSelect = document.createElement('select');
+      dayOffSelect.style.width = '110px';
+      const noneDayOffOpt = document.createElement('option');
+      noneDayOffOpt.value = '';
+      noneDayOffOpt.textContent = 'No preferred day off';
+      dayOffSelect.appendChild(noneDayOffOpt);
+      ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].forEach((dName, dIdx) => {
+        const opt = document.createElement('option');
+        opt.value = dIdx;
+        opt.textContent = 'Prefers ' + dName + ' off';
+        dayOffSelect.appendChild(opt);
+      });
+      dayOffSelect.value = emp.preferredDayOff != null ? emp.preferredDayOff : '';
+      dayOffSelect.addEventListener('change', () => {
+        emp.preferredDayOff = dayOffSelect.value === '' ? null : parseInt(dayOffSelect.value, 10);
+        saveRoster();
+      });
       const delBtn = document.createElement('button');
       delBtn.textContent = 'Remove';
       delBtn.addEventListener('click', () => {
@@ -922,8 +972,14 @@ function renderRosterEditor(){
       line.appendChild(prefSelect);
       line.appendChild(areaSelect);
       line.appendChild(phoneInput);
+      line.appendChild(targetInput);
       line.appendChild(delBtn);
       block.appendChild(line);
+
+      const dayOffLine = document.createElement('div');
+      dayOffLine.className = 'emp-line';
+      dayOffLine.appendChild(dayOffSelect);
+      block.appendChild(dayOffLine);
 
       const blockLine = document.createElement('div');
       blockLine.className = 'emp-line';
@@ -948,12 +1004,44 @@ function renderRosterEditor(){
         blockLine.appendChild(dayBtn);
       });
       block.appendChild(blockLine);
+
+      const recurLine = document.createElement('div');
+      recurLine.className = 'emp-line';
+      const recurLabel = document.createElement('label');
+      recurLabel.textContent = 'Always schedule:';
+      recurLabel.style.minWidth = '100px';
+      recurLine.appendChild(recurLabel);
+      if(!emp.recurringShifts) emp.recurringShifts = {};
+      dayAbbrevs.forEach((abbr, dIdx) => {
+        const recurSelect = document.createElement('select');
+        recurSelect.style.width = '78px';
+        recurSelect.style.fontSize = '11px';
+        const noneOpt = document.createElement('option');
+        noneOpt.value = '';
+        noneOpt.textContent = abbr + ': —';
+        recurSelect.appendChild(noneOpt);
+        legend.filter(l => l.key !== 'OFF').forEach(l => {
+          const opt = document.createElement('option');
+          opt.value = l.key;
+          opt.textContent = abbr + ': ' + l.label;
+          recurSelect.appendChild(opt);
+        });
+        recurSelect.value = emp.recurringShifts[dIdx] || '';
+        if(recurSelect.value) recurSelect.style.background = legendByKey(recurSelect.value).color;
+        recurSelect.addEventListener('change', () => {
+          if(recurSelect.value) emp.recurringShifts[dIdx] = recurSelect.value;
+          else delete emp.recurringShifts[dIdx];
+          saveRoster(); renderRosterEditor();
+        });
+        recurLine.appendChild(recurSelect);
+      });
+      block.appendChild(recurLine);
     });
 
     const addEmpBtn = document.createElement('button');
     addEmpBtn.textContent = '+ Add employee';
     addEmpBtn.addEventListener('click', () => {
-      group.employees.push({id:newEmpId(), name:'NEW', pref:'either', areaPref:'either', blockedDays:[]});
+      group.employees.push({id:newEmpId(), name:'NEW', pref:'either', areaPref:'either', blockedDays:[], recurringShifts:{}, hourTarget:null, preferredDayOff:null});
       saveRoster(); renderRosterEditor(); renderTable();
     });
     block.appendChild(addEmpBtn);
@@ -972,10 +1060,14 @@ function renderRosterEditor(){
 
 function renderRequirementsEditor(){
   const container = document.getElementById('reqEditor');
-  container.innerHTML = '<h3>Staffing needed per day</h3><p style="font-size:12px;color:#555;margin-top:0;">How many people from each group should be working, split by day-shift and night-shift, and which shift type Generate should assign them. Generate picks OFF, unlocked people — preferring whoever\'s Day/Night preference matches (set in "Edit roster") — and fills in that shift type for them.</p>';
+  container.innerHTML = '<h3>Staffing needed per day</h3><p style="font-size:12px;color:#555;margin-top:0;">How many people from each group should be working, set separately for each day of the week, split by day-shift and night-shift. Generate picks OFF, unlocked people — preferring whoever\'s Day/Night preference matches (set in "Edit roster") — and fills in the shift type below for them.</p>';
+  const dayAbbrevsReq = ['Mo','Tu','We','Th','Fr','Sa','Su'];
+
   roster.forEach(group => {
-    if(!requirements[group.name]) requirements[group.name] = {day:0, night:0, dayType:'', nightType:''};
+    if(!requirements[group.name]) requirements[group.name] = {day:new Array(7).fill(0), night:new Array(7).fill(0), dayType:'', nightType:''};
     const req = requirements[group.name];
+    if(typeof req.day === 'number' || req.day == null) req.day = new Array(7).fill(req.day || 0);
+    if(typeof req.night === 'number' || req.night == null) req.night = new Array(7).fill(req.night || 0);
     if(!req.dayType) req.dayType = defaultTypeForPeriod('day');
     if(!req.nightType) req.nightType = defaultTypeForPeriod('night');
 
@@ -986,63 +1078,61 @@ function renderRequirementsEditor(){
     title.textContent = group.name;
     block.appendChild(title);
 
-    const line1 = document.createElement('div');
-    line1.className = 'emp-line';
-    const dayLabel = document.createElement('label');
-    dayLabel.textContent = 'Day count:';
-    const dayInput = document.createElement('input');
-    dayInput.type = 'text';
-    dayInput.inputMode = 'numeric';
-    dayInput.style.width = '50px';
-    dayInput.value = req.day;
-    dayInput.addEventListener('change', () => {
-      const v = parseInt(dayInput.value, 10);
-      req.day = isNaN(v) ? 0 : v;
-      saveRequirements();
-    });
-    const dayTypeSelect = document.createElement('select');
-    dayTypeSelect.style.width = '110px';
-    legend.filter(l => l.key !== 'OFF').forEach(l => {
-      const opt = document.createElement('option');
-      opt.value = l.key;
-      opt.textContent = l.label;
-      dayTypeSelect.appendChild(opt);
-    });
-    dayTypeSelect.value = req.dayType;
-    dayTypeSelect.addEventListener('change', () => { req.dayType = dayTypeSelect.value; saveRequirements(); });
-    line1.appendChild(dayLabel);
-    line1.appendChild(dayInput);
-    line1.appendChild(dayTypeSelect);
-    block.appendChild(line1);
+    function buildPeriodRow(label, countsArr, typeSelectValue, onTypeChange){
+      const typeLine = document.createElement('div');
+      typeLine.className = 'emp-line';
+      const typeLabel = document.createElement('label');
+      typeLabel.textContent = label + ' shift type:';
+      typeLabel.style.minWidth = '110px';
+      const typeSelect = document.createElement('select');
+      typeSelect.style.width = '120px';
+      legend.filter(l => l.key !== 'OFF').forEach(l => {
+        const opt = document.createElement('option');
+        opt.value = l.key;
+        opt.textContent = l.label;
+        typeSelect.appendChild(opt);
+      });
+      typeSelect.value = typeSelectValue;
+      typeSelect.addEventListener('change', () => { onTypeChange(typeSelect.value); saveRequirements(); });
+      typeLine.appendChild(typeLabel);
+      typeLine.appendChild(typeSelect);
 
-    const line2 = document.createElement('div');
-    line2.className = 'emp-line';
-    const nightLabel = document.createElement('label');
-    nightLabel.textContent = 'Night count:';
-    const nightInput = document.createElement('input');
-    nightInput.type = 'text';
-    nightInput.inputMode = 'numeric';
-    nightInput.style.width = '50px';
-    nightInput.value = req.night;
-    nightInput.addEventListener('change', () => {
-      const v = parseInt(nightInput.value, 10);
-      req.night = isNaN(v) ? 0 : v;
-      saveRequirements();
-    });
-    const nightTypeSelect = document.createElement('select');
-    nightTypeSelect.style.width = '110px';
-    legend.filter(l => l.key !== 'OFF').forEach(l => {
-      const opt = document.createElement('option');
-      opt.value = l.key;
-      opt.textContent = l.label;
-      nightTypeSelect.appendChild(opt);
-    });
-    nightTypeSelect.value = req.nightType;
-    nightTypeSelect.addEventListener('change', () => { req.nightType = nightTypeSelect.value; saveRequirements(); });
-    line2.appendChild(nightLabel);
-    line2.appendChild(nightInput);
-    line2.appendChild(nightTypeSelect);
-    block.appendChild(line2);
+      const countsLine = document.createElement('div');
+      countsLine.className = 'emp-line';
+      const countsLabel = document.createElement('label');
+      countsLabel.textContent = label + ' count:';
+      countsLabel.style.minWidth = '110px';
+      countsLine.appendChild(countsLabel);
+      dayAbbrevsReq.forEach((abbr, dIdx) => {
+        const wrap = document.createElement('span');
+        wrap.style.display = 'inline-flex';
+        wrap.style.flexDirection = 'column';
+        wrap.style.alignItems = 'center';
+        wrap.style.fontSize = '10px';
+        const dLabel = document.createElement('span');
+        dLabel.textContent = abbr;
+        dLabel.style.color = '#888';
+        const dInput = document.createElement('input');
+        dInput.type = 'text';
+        dInput.inputMode = 'numeric';
+        dInput.style.width = '34px';
+        dInput.style.textAlign = 'center';
+        dInput.value = countsArr[dIdx];
+        dInput.addEventListener('change', () => {
+          const v = parseInt(dInput.value, 10);
+          countsArr[dIdx] = isNaN(v) ? 0 : v;
+          saveRequirements();
+        });
+        wrap.appendChild(dLabel);
+        wrap.appendChild(dInput);
+        countsLine.appendChild(wrap);
+      });
+
+      return [typeLine, countsLine];
+    }
+
+    buildPeriodRow('Day', req.day, req.dayType, v => { req.dayType = v; }).forEach(el => block.appendChild(el));
+    buildPeriodRow('Night', req.night, req.nightType, v => { req.nightType = v; }).forEach(el => block.appendChild(el));
 
     container.appendChild(block);
   });
@@ -1193,22 +1283,61 @@ function runGenerate(){
     }
   });
 
+  // Track each employee's working-day count across the whole week so nobody ends up with zero days off
+  const workingDaysCount = {};
+  const workingHoursTotal = {};
+  allEmployeesFlat().forEach(emp => {
+    let count = 0;
+    for(let d=0; d<numDays; d++){
+      if(getCell(emp.id, d).type !== 'OFF') count++;
+    }
+    workingDaysCount[emp.id] = count;
+    workingHoursTotal[emp.id] = computeEmployeeWeeklyHours(emp.id).total;
+  });
+
+  // Apply each employee's recurring shift pattern first, before filling group coverage
+  allEmployeesFlat().forEach(emp => {
+    const pattern = emp.recurringShifts || {};
+    Object.keys(pattern).forEach(dStr => {
+      const d = parseInt(dStr, 10);
+      if(d >= numDays) return; // this week doesn't include that day (e.g. Sunday hidden)
+      if((emp.blockedDays || []).includes(d)) return; // blocked day always wins
+      if(workingDaysCount[emp.id] >= numDays - 1) return; // keep at least one day off
+      const c = getCell(emp.id, d);
+      if(c.type !== 'OFF' || c.locked) return; // don't override something already set or locked
+      const typeKey = pattern[d];
+      const l = legendByKey(typeKey);
+      const shiftHours = parseShiftHours(l.defaultTime) || 0;
+      if(emp.hourTarget != null && emp.hourTarget > 0 && (workingHoursTotal[emp.id] + shiftHours) > emp.hourTarget){
+        warnings.push(`${DAY_NAMES[d]} ${formatDateShort(days[d])} — ${emp.name}'s usual ${l.label} shift was skipped, would go over their ${emp.hourTarget}hr target`);
+        return;
+      }
+      setCell(emp.id, d, {type: typeKey, time: l.defaultTime || '', needsFill:true});
+      workingDaysCount[emp.id] = (workingDaysCount[emp.id] || 0) + 1;
+      workingHoursTotal[emp.id] = (workingHoursTotal[emp.id] || 0) + shiftHours;
+    });
+  });
+
   function periodOfCell(c){
     if(c.type === 'OFF') return null;
     const l = legendByKey(c.type);
     return l.period || 'either';
   }
 
-  function pickCandidates(group, d, period, area, count, alreadyTaken){
+  function pickCandidates(group, d, period, area, count, alreadyTaken, shiftHours){
     const pool = group.employees.filter(emp => {
       if(alreadyTaken.has(emp.id)) return false;
       if((emp.blockedDays || []).includes(d)) return false;
+      if(workingDaysCount[emp.id] >= numDays - 1) return false; // keep at least one day off
+      if(emp.hourTarget != null && emp.hourTarget > 0 && (workingHoursTotal[emp.id] + shiftHours) > emp.hourTarget) return false;
       const c = getCell(emp.id,d);
       return c.type === 'OFF' && !c.locked;
     });
     // prefer matching preference, then 'either'-preference people, then the opposite as last resort — combine period + area
     const rank = (val, target) => val === target ? 0 : (val === 'either' ? 1 : 2);
-    const score = emp => rank(emp.pref || 'either', period) + rank(emp.areaPref || 'either', area);
+    // balance the week first — prefer whoever has worked fewer days so far — then break ties by preference match,
+    // and nudge away from anyone's preferred day off (soft — still usable if nobody else is available)
+    const score = emp => (workingDaysCount[emp.id] || 0) * 10 + rank(emp.pref || 'either', period) + rank(emp.areaPref || 'either', area) + (emp.preferredDayOff === d ? 5 : 0);
     pool.sort((a,b) => score(a) - score(b));
     return pool.slice(0, count);
   }
@@ -1216,11 +1345,12 @@ function runGenerate(){
   // Step 1: for each day/group, assign enough OFF+unlocked people to hit day & night quotas
   for(let d=0; d<numDays; d++){
     roster.forEach(group => {
-      const req = requirements[group.name] || {day:0, night:0, dayType:'OTH', nightType:'OTH'};
+      const req = requirements[group.name] || {day:new Array(7).fill(0), night:new Array(7).fill(0), dayType:'OTH', nightType:'OTH'};
       const takenToday = new Set();
 
       ['day','night'].forEach(period => {
-        const required = req[period] || 0;
+        const periodArr = req[period];
+        const required = (Array.isArray(periodArr) ? periodArr[d] : periodArr) || 0;
         if(required <= 0) return;
         const filledCount = group.employees.filter(emp => {
           const c = getCell(emp.id,d);
@@ -1234,11 +1364,14 @@ function runGenerate(){
         if(!assignType || assignType === 'OFF') assignType = defaultTypeForPeriod(period);
         const assignArea = legendByKey(assignType).area || 'either';
         const assignTime = legendByKey(assignType).defaultTime || '';
+        const assignHours = parseShiftHours(assignTime) || 0;
 
-        const picked = pickCandidates(group, d, period, assignArea, shortfall, takenToday);
+        const picked = pickCandidates(group, d, period, assignArea, shortfall, takenToday, assignHours);
         picked.forEach(emp => {
           setCell(emp.id, d, {type: assignType, time: assignTime, needsFill:true});
           takenToday.add(emp.id);
+          workingDaysCount[emp.id] = (workingDaysCount[emp.id] || 0) + 1;
+          workingHoursTotal[emp.id] = (workingHoursTotal[emp.id] || 0) + assignHours;
         });
 
         if(picked.length < shortfall){
@@ -1342,7 +1475,7 @@ async function init(){
   document.getElementById('btnResetReq').addEventListener('click', async () => {
     if(!confirm('This clears the staffing counts back to 0 for every group, so Generate won\'t auto-assign anyone until you set new numbers. Continue?')) return;
     requirements = {};
-    roster.forEach(g => { requirements[g.name] = {day:0, night:0, dayType: defaultTypeForPeriod('day'), nightType: defaultTypeForPeriod('night')}; });
+    roster.forEach(g => { requirements[g.name] = {day:new Array(7).fill(0), night:new Array(7).fill(0), dayType: defaultTypeForPeriod('day'), nightType: defaultTypeForPeriod('night')}; });
     await saveRequirements();
     setStatus('Staffing needs reset to 0 — Generate won\'t assign anyone until you set counts again.');
   });
