@@ -129,11 +129,11 @@
   #syncDot.live{background:#2e9e44;}
 
   @media print{
-    body{background:#fff;padding:0;font-size:11px;}
-    .toolbar,.roster-editor,.legend-editor,#status,.no-print,#loginBar,#cloudSetup{display:none !important;}
+    body{background:#fff;padding:0;font-size:11px;-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact;}
+    .toolbar,.roster-editor,.legend-editor,#status,.no-print,#loginBar,#cloudSetup,.legend,#generatePanel{display:none !important;}
     .tablewrap{border:none;}
-    select.shift-select{border:none;background:transparent !important;pointer-events:none;-webkit-appearance:none;appearance:none;}
-    input.shift-time{border:none;background:transparent !important;}
+    select.shift-select{border:none;pointer-events:none;-webkit-appearance:none;appearance:none;-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact;}
+    input.shift-time{border:none;-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact;}
     .celltoggles{display:none !important;}
     table{min-width:0;}
   }
